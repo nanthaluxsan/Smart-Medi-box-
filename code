@@ -1,0 +1,651 @@
+#include <DS3231.h>//Memanggil RTC3231 Library
+#include <EEPROM.h>
+#include <SoftwareSerial.h>
+#include<CheapStepper.h>
+#include <Wire.h> 
+#include <LiquidCrystal_I2C.h>
+#include <SoftwareSerial.h>
+
+// Esp-01 Module serial communication 
+#define RX 3
+#define TX 2
+
+#define bt_menu   7
+#define bt_up     8
+#define bt_down   6
+#define bt_select  9
+
+#define buzzer 10
+
+#define bt_door 5
+
+#define white 11
+#define blue 12
+#define red 13
+
+// Init DS3231
+DS3231  rtc(SDA, SCL);
+//Arduino pins to lcd
+LiquidCrystal_I2C lcd(0x27, 16, 2);                                         
+// Esp-01 Module
+SoftwareSerial esp8266(RX,TX); 
+// Init a Time-data structure
+Time  t;
+
+
+int hh = 0, mm = 0, ss = 0, dd = 0, bb = 0;
+int yy = 0;
+String Day = "  ";
+
+
+int setMode=0,HH=0,MM=0,DD=0,MO=0,YY=0,AM_PM=0;                            // time and date reseting (current time, remainder time,)
+int menu_mode=0, pillbox=0,pill_inside=0, box =0;
+
+char menu[6][16] = {"SETUP-MENU","PILL IN/RESET","TIME/DATE","REMAINDER TIME","EXIT"};
+
+//Medicine - tablet-count
+String time_slots[3]={"MORNING","LUNCH","NIGHT"};
+int medicine[3][8]={{1,0,1,0,0,0,1,0},{0,0,0,0,0,0,0,0},{0,0,0,0,0,0,0,0}};
+
+//remaider alarm variable
+int remain_slot=0;
+int remain_time[3][2]={06,0,13,0,20,0};
+int t_h_m=0;
+
+// tele-number reseting and tele number storing
+// int tele_num_id=0;
+// int tele_num[9]={0,0,0,0,0,0,0,0,0};
+// String tele_number[1]={"AT+CMGS=\"+94771518865\""};
+
+//medicine taking
+int medi_confirm[3]={0,0,0};
+int medi_time = -1;
+
+int cur_posi;
+int motor_posi=0;
+
+
+// Esp Module code
+String AP = "Nanthu";   
+String PASS = "thara_maden"; 
+String API = "FROX8OK6043D9QXM";
+String HOST = "api.thingspeak.com";
+String PORT = "80";
+String field = "field1";
+int countTrueCommand;
+int countTimeCommand; 
+boolean found = false; 
+int valSensor = 1;
+String value[3]={"0","0","0"};
+
+
+void setup() {
+     rtc.begin(); // memulai koneksi i2c dengan RTC
+     rtc.setTime (03, 59, 30);
+     
+     pinMode(bt_menu,  INPUT_PULLUP);
+     pinMode(bt_up,    INPUT_PULLUP);
+     pinMode(bt_down,  INPUT_PULLUP);
+     pinMode(bt_select, INPUT_PULLUP);
+     pinMode(buzzer, OUTPUT);
+     pinMode(bt_door, INPUT);
+
+     pinMode(white,OUTPUT);
+     pinMode(blue,OUTPUT);
+     pinMode(red,OUTPUT);
+     
+     lcd.init();
+     lcd.clear();         
+     lcd.backlight(); 
+     lcd.begin(16, 2); // Configura lcd numero columnas y filas
+     
+     lcd.setCursor(0,0);  //Show "TIME" on the LCD  
+     lcd.print(" safety_first ");
+     lcd.setCursor (0,1);
+     lcd.print(" Medi-Care-Box ");
+     delay (5000);
+     lcd.clear(); 
+
+
+     // Esp Module code
+     // Serial.begin(9600);
+     esp8266.begin(115200);
+     sendCommand("AT",5,"OK");
+     sendCommand("AT+CWMODE=0",5,"OK");
+     sendCommand("AT+CWJAP=\""+ AP +"\",\""+ PASS +"\"",20,"OK");
+}
+
+void loop() {
+      t = rtc.getTime();
+      Day = rtc.getDOWStr(1);
+      hh = t.hour,DEC;
+      mm = t.min,DEC;
+      ss = t.sec,DEC;
+      dd = t.date,DEC;
+      bb = t.mon,DEC;
+      yy = t.year,DEC; 
+
+     //  print the current time and date  
+     lcd.setCursor(0,0); 
+     print_time(hh,mm,ss);
+     lcd.setCursor(1,1);
+     print_date(dd,bb,yy);
+
+     Communication(1);
+   
+     if(hh==0 && mm==0){
+            for(int i=0;i<3;i++){
+            medi_confirm[i]=0;}}   
+      
+    if (digitalRead(bt_menu)==0){
+        lcd.clear();
+        menu_mode= 1;
+        select_menu();}
+    else if (digitalRead(bt_select)==0){
+        lcd.clear();
+        medicine_take();}
+    alarming_msg();
+}
+
+void print_time(int hh,int mm,int ss){
+      lcd.print("    ");
+      lcd.print((hh/10)%10);lcd.print(hh % 10); 
+      lcd.print(":");
+      lcd.print((mm/10)%10);lcd.print(mm % 10);
+      
+      if(ss>=0){
+            lcd.print(":");
+            lcd.print((ss/10)%10);lcd.print(ss % 10);}
+  }
+
+void print_date(int dd,int bb, int yy){
+      lcd.print("  ");
+      lcd.print((dd/10)%10);lcd.print(dd % 10); 
+      lcd.print("/");
+      lcd.print((bb/10)%10);lcd.print(bb % 10);
+      lcd.print("/"); 
+      lcd.print((yy/1000)%10);lcd.print((yy/100)%10);lcd.print((yy/10)%10);lcd.print(yy % 10);
+      }
+      
+void select_menu(){
+      if (menu_mode<5 && digitalRead(bt_up)==0 ){
+            menu_mode= menu_mode+1;
+            lcd.clear();
+            delay(500);}
+      else if (menu_mode>1 && menu_mode<=5 && digitalRead(bt_down)==0 ){
+            menu_mode= menu_mode-1;
+            lcd.clear();
+            delay(500);}
+      
+      lcd.setCursor(0,0);
+      if (menu_mode==1){
+            lcd.print("   ");lcd.print(menu[0]);lcd.print("   ");}
+      else{
+            lcd.print(menu_mode-1);lcd.print(".");lcd.print(menu[menu_mode-1]);}
+    
+      lcd.setCursor(0,1);
+      lcd.print("->");
+      lcd.print(menu[menu_mode]);
+      lcd.setCursor(0,1);lcd.print("  ");
+
+      if (digitalRead(bt_select)==0 ){
+          if(menu_mode==5 ){
+                menu_mode=0;
+                lcd.clear();
+                delay(300);
+                return;}
+          else if(menu_mode==4){
+                //phone_number();
+                menu_mode=5;
+                }
+          else if(menu_mode==3){
+                remain_slot=1;lcd.clear();delay(500);
+                remainder_time();}
+          else if(menu_mode==2){
+                lcd.clear();
+                delay(500);
+                setMode=1;
+                time_date();}
+          else if(menu_mode==1){
+                pillbox=1;
+                delay(300);
+                lcd.clear();
+                pill_box();}
+          }
+      select_menu();
+}
+
+
+
+void pill_box(){
+        if (pillbox>0 && pillbox<=8 && digitalRead(bt_up)==0){   
+              pillbox=pillbox+1;  lcd.clear();   delay(200);
+              if(pillbox<9){stepper(pillbox-1);}}
+        if (pillbox>1 && pillbox<=9 && digitalRead(bt_down)==0){
+              pillbox=pillbox-1;  lcd.clear();   delay(200);
+              stepper(pillbox-1);}
+         
+        // exit from pill box menu and go inside the every pill box
+        if (digitalRead(bt_select)==0){
+              if (pillbox==9 ){
+                    pillbox=0;
+                    stepper(0);
+                    delay(300);
+                    lcd.clear();
+                    return;}
+              else if (pillbox<9 && pillbox>0  && pill_inside==0){
+                    pill_inside=1;
+                    delay(300);
+                    lcd.clear();
+                    pill__inside(pillbox);}
+             }
+             
+        if (pillbox>0 && pillbox<10){
+              lcd.setCursor(0,0);
+              if (pillbox==1){
+                   lcd.print("   ");lcd.print("SELECT BOX");lcd.print("   ");}
+              else{
+                   lcd.print("->");lcd.print("PILL BOX - ");lcd.print(pillbox-1);}
+           
+              lcd.setCursor(0,1);lcd.print("->");
+              if (pillbox==9){
+                   lcd.print("EXIT");}
+              else{
+                   lcd.print("PILL BOX - ");lcd.print(pillbox);}
+              lcd.setCursor(0,1);lcd.print("  ");
+              }
+        pill_box();
+  }
+
+
+void pill__inside(int box){
+  //iterate time slot in pill box
+  if (pill_inside>0 && pill_inside<3 && digitalRead(bt_select)==0){
+        lcd.clear();
+        pill_inside=pill_inside+1;delay(500);}
+        
+  if (pill_inside>0){
+        int count =medicine[pill_inside-1][box-1];
+        if (digitalRead(bt_up)==0 && count<10){
+                count=count+1;
+                delay(500);}
+        else if (digitalRead(bt_down)==0 && count>0 ){
+                count = count-1;
+                delay(500);}
+                
+        lcd.setCursor(0,0);  
+        if (pill_inside==1){
+                lcd.print("   TIME-COUNT   ");}
+        else{
+                lcd.print(pill_inside-1);lcd.print(".");lcd.print(time_slots[pill_inside-2]);
+                lcd.setCursor(14,0);lcd.print("0");lcd.print(medicine[pill_inside-2][box-1]);}
+                
+        lcd.setCursor(0,1);lcd.print(pill_inside);lcd.print(".");lcd.print(time_slots[pill_inside-1]);
+        lcd.setCursor(14,1);lcd.print("0");lcd.print(count);
+        delay(50);
+        lcd.setCursor(14,1);lcd.print("  ");
+        medicine[pill_inside-1][box-1]=count;   }
+        
+  if (pill_inside==3 && digitalRead(bt_select)==0){
+        lcd.clear();lcd.setCursor(0,0);lcd.print("Saved Successfully");delay(2000);
+        lcd.clear();pill_inside=0; pillbox=box;}
+  else{pill__inside(box);}
+  
+  }  
+
+
+void time_date(){
+        if (digitalRead(bt_select)==0){
+              if (setMode==5 ){ 
+                    lcd.clear();
+                    rtc.setTime (hh, mm, ss);
+                    rtc.setDate (dd, bb, yy);
+                    lcd.setCursor(0,0);lcd.print("   TIME-DATE  "); 
+                    lcd.setCursor(0,1);lcd.print("UPDATE SUCESSFULLY");
+                    delay(2000);
+                    lcd.clear();
+                    return;}
+              else if (setMode<5 ){
+                    setMode=setMode+1; if (setMode==3){lcd.clear();}
+                    delay(500);}
+              }
+         else if (digitalRead(bt_up)==0){
+              if(setMode==1){hh=(hh+1)%24;}
+              if(setMode==2){mm=(mm+1)%60;}
+              if(setMode==3){dd=(dd+1)%31;}
+              if(setMode==4){bb=(bb+1)%12;}
+              if(setMode==5){yy=yy+1;}
+              delay(300);
+            }
+        else if (digitalRead(bt_down)==0){
+              if(setMode==1){hh=(hh-1)%24;if(hh<0){hh=24+hh;}}
+              if(setMode==2){mm=(mm-1)%60;if(mm<0){mm=60+mm;}}
+              if(setMode==3){dd=(dd-1)%31;if(dd<0){dd=31+dd;}}
+              if(setMode==4){bb=(bb-1)%12;if(bb<0){bb=12+bb;}}
+              if(setMode==5){yy=yy-1;}
+              delay(300);
+              }
+        if (setMode<3){
+              lcd.setCursor(0,0);lcd.print("  TIME RESET  ");
+              lcd.setCursor(0,1);print_time(hh,mm,-1);
+              cur_posi=setMode*3+1;
+              delay(50);
+              lcd.setCursor(cur_posi,1);lcd.print("  ");}
+              
+         else if (setMode>2 && setMode<6){
+              lcd.setCursor(0,0);
+              lcd.print("   DATE RESET    ");
+              lcd.setCursor(0,1);print_date(dd,bb,yy);
+              cur_posi=setMode*3-7;
+              delay(50);
+              if(setMode==5){lcd.setCursor(cur_posi,1);lcd.print("    ");}
+              else{lcd.setCursor(cur_posi,1);lcd.print("  ");}
+              }
+         time_date();      
+  }
+
+void remainder_time(){
+  if(digitalRead(bt_select)==0){
+      if (remain_slot==3 && t_h_m==1){
+        lcd.clear();
+        remain_slot=0;t_h_m=0;
+        lcd.setCursor(0,0);lcd.print("REMAINDER UPDATED");
+        menu_mode=3;delay(1000);}
+      else if (remain_slot>0 && remain_slot<4){
+            lcd.clear();delay(200);
+            if (t_h_m==0){t_h_m=1;}
+            else{remain_slot=remain_slot+1;t_h_m=0;}}
+      }
+  if(remain_slot>0){
+        int vary = remain_time[remain_slot-1][t_h_m];
+        if (digitalRead(bt_up)==0){
+              if(t_h_m==0){vary=vary%24+1;if (vary==24){vary=0;}}
+              else if(t_h_m==1){vary=vary%60+1;if (vary==60){vary=0;}}
+              delay(300);
+          }
+        else if (digitalRead(bt_down)==0){
+              if(t_h_m==0){vary=vary%24-1;if (vary==24){vary=0;}}
+              else if(t_h_m==1){vary=vary%60-1;if (vary==60){vary=0;}}
+              delay(300);
+          }
+        remain_time[remain_slot-1][t_h_m]=vary;
+        lcd.setCursor(0,0);
+        lcd.print(" REMAINDER TIME   ");
+        lcd.setCursor(0,1);
+        lcd.print(remain_slot);lcd.print(".");
+        lcd.print(time_slots[remain_slot-1]);
+        lcd.setCursor(11,1);   
+        if(remain_time[remain_slot-1][0]<10){lcd.print("0");}
+        lcd.print(remain_time[remain_slot-1][0]);lcd.print(":");
+        if(remain_time[remain_slot-1][1]<10){lcd.print("0");}
+        lcd.print(remain_time[remain_slot-1][1]);
+        cur_posi=11+t_h_m*3;
+        delay(100);
+        lcd.setCursor(cur_posi,1);
+        lcd.print("  ");
+        delay(50);
+
+        
+        remainder_time();
+        
+            }
+    }
+
+
+void alarming_msg(){ 
+  for(int i=0;i<3;i++){
+        if(medi_confirm[i]==0 && hh==remain_time[i][0] && mm>=remain_time[i][1]){
+              lcd.clear();
+              speaker();             
+              lcd.setCursor(0,0);lcd.print(time_slots[i]);lcd.print("  MEDICINE");
+              lcd.setCursor(0,1);lcd.print("     TIME   ");
+              medi_confirm[i]=-1;
+              delay(10000);
+              noTone(buzzer);
+              lcd.clear();
+              break;}
+        if(medi_confirm[i]==-1 && (hh-1)==remain_time[i][0] && mm>=remain_time[i][1]){
+              lcd.clear();
+              medi_confirm[i]=-2;
+              //sms_module(i);
+              lcd.setCursor(0,0);lcd.print("  YOU FORGOT ");
+              lcd.setCursor(0,1);lcd.print(time_slots[i]);lcd.print(" MEDICINE");
+              speaker();
+              delay(5000);
+              lcd.clear();
+              lcd.setCursor(0,0);lcd.print("THE ALERT SENDED");
+              lcd.setCursor(0,1);lcd.print(" TO CARE TAKER ");
+              delay(3000);
+              noTone(buzzer);
+              lcd.clear();
+              break;
+              }
+         if((remain_time[i][0]+2)>hh && (remain_time[i][0]-2 )<hh){
+              if (medi_confirm[i]==0){
+                digitalWrite(white,HIGH);
+                digitalWrite(blue,LOW);
+                digitalWrite(red,LOW);
+
+                value[0]="0";
+                value[1]="0";
+                value[2]="20";
+
+                Communication(0);
+
+                }
+              else if(medi_confirm[i]==1){
+                digitalWrite(white,LOW);
+                digitalWrite(blue,HIGH);
+                digitalWrite(red,LOW);
+                value[0]="20";
+                value[1]="0";
+                value[2]="0";
+                
+                Communication(1);
+
+                }
+              else if(medi_confirm[i]<0){
+                digitalWrite(white,LOW);
+                digitalWrite(blue,LOW);
+                digitalWrite(red,HIGH);
+                
+                value[0]="0";
+                value[1]="20";
+                value[2]="0";
+                
+                Communication(2);
+
+                }
+              break;}
+              
+          else if(i==2){
+            
+                digitalWrite(white,LOW);
+                digitalWrite(blue,LOW);
+                digitalWrite(red,LOW);
+
+                value[0]="0";
+                value[1]="0";
+                value[2]="0";
+                
+                Communication(3);
+            }
+         }
+        
+  }
+
+void medicine_take(){
+    if(digitalRead(bt_select)==0 ){
+          lcd.clear();
+          for(int i=0;i<3;i++){
+                if((remain_time[i][0]+2)>hh && (remain_time[i][0]-2)<hh){
+                      if (medi_confirm[i]==1){
+                        lcd.setCursor(0,0);lcd.print("  YOU ALREADY");
+                        lcd.setCursor(0,1);lcd.print(" TAKE MEDICINE ");
+                        delay(3000);
+                        lcd.clear();}
+                      else{
+                        lcd.setCursor(0,0);lcd.print("NOW YOU CAN TAKE");
+                        lcd.setCursor(0,1);lcd.print(time_slots[i]);lcd.print(" MEDICINE ");
+                        medi_time=i;
+                        delay(1000);
+                        if(digitalRead(bt_door)==LOW){
+                         /* while(digitalRead(bt_door)==LOW){
+                            lcd.clear();
+                            lcd.setCursor(0,0);lcd.print("OPEN THE BOX DOOR");
+                            delay(50);
+                            if(digitalRead(bt_menu)==0){return;}
+                            }*/
+                            }
+                          
+                        take();}
+                      break;
+                      } 
+              else if(i==2){
+                        lcd.setCursor(0,0);lcd.print("NO MORE MEDICINR");
+                        lcd.setCursor(0,1);lcd.print(" THIS TIME ");
+                        delay(5000);
+                        medi_time=-1;
+                        lcd.clear();}
+          }
+      }
+      }
+
+void take(){
+    if(medi_time>=0){
+          lcd.clear();
+          lcd.setCursor(0,0);lcd.print(time_slots[medi_time]);lcd.print(" TIME PILLS");
+          lcd.setCursor(0,1);lcd.print("   Press up >>");
+          int box=0,finish=0;
+          while(finish==0){
+                if(digitalRead(bt_up)==0){
+                       while (box<8){                              
+                              if(medicine[medi_time][box]>0){break;}
+                              else{box=box+1;}}
+                       if(box==8){
+                              lcd.setCursor(0,0);lcd.print("  YOU TOOK ALL  ");
+                              lcd.setCursor(0,1);lcd.print("    MEDICINE    ");
+                              delay(3000);lcd.clear();
+                              stepper(0);
+                              finish=1;
+                              medi_confirm[medi_time]=1;
+                              medi_time=-1;}
+                        else {
+                              lcd.clear();
+                              lcd.setCursor(0,0);lcd.print("Pill Box -");lcd.print(box+1);
+                              lcd.setCursor(0,1);lcd.print(medicine[medi_time][box]);lcd.print(" - pills");
+                              stepper(box);
+                              box=box+1;
+                              delay(300);}
+                        }
+                 else if(digitalRead(bt_down)==0){
+                      box=box-2;
+                      
+                      delay(300);
+
+                      while(box>=0){
+                              if(medicine[medi_time][box]>0){
+                                      lcd.clear();
+                                      lcd.setCursor(0,0);lcd.print("Pill Box -");lcd.print(box+1);
+                                      lcd.setCursor(0,1);lcd.print(medicine[medi_time][box]);lcd.print(" - pills");
+                                      stepper(box);
+                                      delay(300);
+                                      box=box+1;
+                                      break;}
+                              else if(box==0){break;}
+                              else{box=box-1;}}
+                      }
+             } 
+        }
+    }
+
+
+      
+void stepper(int box){
+        CheapStepper tabletangle (A3,A2,A1,A0);
+        tabletangle.setRpm(12);
+        int angle;
+     
+        if(box<motor_posi){
+              angle = (motor_posi-box)*45;
+              tabletangle.moveDegreesCCW (angle);
+              motor_posi-=(motor_posi-box);}
+        else{ 
+          angle = (box-motor_posi)*45;
+          tabletangle.moveDegreesCW (angle);
+          motor_posi+=(box-motor_posi);}
+        delay(1000);
+  }
+  
+void speaker(){
+        tone(buzzer,500);
+        delay(2000);
+        }
+        
+
+void sendCommand(String command, int maxTime, char readReplay[]) {
+      //Serial.print(countTrueCommand);
+      //Serial.print(". at command => ");
+      //Serial.print(command);
+      //Serial.print(" ");
+      
+      while(countTimeCommand < (maxTime*1))
+      {
+        esp8266.println(command);//at+cipsend
+        if(esp8266.find(readReplay))//ok
+        {
+          found = true;
+          break;
+        }
+      
+        countTimeCommand++;
+      }
+      countTimeCommand=0;
+      /*if(found == true)
+      {
+        Serial.println("OYI");
+        countTrueCommand++;
+        countTimeCommand = 0;
+      }
+      
+      if(found == false)
+      {
+        Serial.println("Fail");
+        countTrueCommand = 0;
+        countTimeCommand = 0;
+      }
+
+      
+      found = false; */
+      
+ }
+
+ void Communication(int val){
+     //valSensor = random(10,20);
+
+     
+
+     /*for (int i=0; i<3; i++){
+
+       if (i==val){    value[i]= "20";}
+       else       {    value[i]= "0";}
+
+     }
+     */
+       // String getData = "GET /update?api_key="+ API +"&"+ field[i] +"="+String(valSensor);
+       
+       String getData = "GET /update?api_key="+ API +"&field1="+value[0]+"&field2="+value[1]+"&field3="+value[2];
+ 
+       sendCommand("AT+CIPMUX=1",5,"OK");
+       sendCommand("AT+CIPSTART=0,\"TCP\",\""+ HOST +"\","+ PORT,15,"OK");
+       sendCommand("AT+CIPSEND=0," +String(getData.length()+4),4,">");
+       esp8266.println(getData);
+       
+       //delay(1000); 
+       countTrueCommand++;
+       
+       //Serial.println(valSensor);
+       sendCommand("AT+CIPCLOSE=0",5,"OK");
+       //delay(1000);
+     
+   }
